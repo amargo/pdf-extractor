@@ -77,6 +77,33 @@
 			"problemMatcher": []
 		},
 		{
+			"label": "Export PDFs with AI Processing",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"${workspaceFolder}/pdf_uploader.py",
+				"${input:pdfPath}",
+				"--export",
+				"--output_dir",
+				"${input:outputDir}",
+				"--force-ocr",
+				"--lang",
+				"${input:ocrLang}",
+				"--openai-api-key",
+				"${input:openaiApiKey}"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": true,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
 			"label": "Upload PDFs",
 			"type": "shell",
 			"command": "python",
@@ -132,6 +159,18 @@
 			"type": "promptString",
 			"description": "Enter SSE negotiation URL",
 			"default": "https://mcp-memory.gszoboszlai.workers.dev/82b841cd-xxxx-xxxx-xxxx-xxxxxxxxxxxx/sse"
+		},
+		{
+			"id": "ocrLang",
+			"type": "promptString",
+			"description": "OCR language code",
+			"default": "hun"
+		},
+		{
+			"id": "openaiApiKey",
+			"type": "promptString",
+			"description": "OpenAI API Key",
+			"default": ""
 		}
 	]
 }

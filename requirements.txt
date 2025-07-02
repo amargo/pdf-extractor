@@ -3,3 +3,5 @@ requests
 PyPDF2
 pillow
 pytesseract
+openai>=1.0.0
+python-dotenv

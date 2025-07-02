@@ -9,6 +9,23 @@ import pytesseract
 import io
 import textwrap
 import re
+import time
+
+# Optional imports - don't fail if not available
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # Load environment variables from .env file
+except ImportError:
+    pass  # dotenv is optional
+
+# Default OpenAI model to use
+DEFAULT_OPENAI_MODEL = "o4-mini"
 
 class PDFUploader:
     """
@@ -19,7 +36,7 @@ class PDFUploader:
     - upload mode: negotiates SSE, sends JSON-RPC calls for text/images
     """
 
-    def __init__(self, pdf_path, sse_url=None, export=False, output_dir=None, force_ocr=False, lang='eng'):
+    def __init__(self, pdf_path, sse_url=None, export=False, output_dir=None, force_ocr=False, lang='eng', openai_api_key=None, openai_model=None):
         self.pdf_path = pdf_path
         self.sse_url = sse_url
         self.export = export
@@ -27,6 +44,9 @@ class PDFUploader:
         self.post_url = None
         self.force_ocr = force_ocr
         self.lang = lang  # OCR language, e.g., 'eng' for English, 'hun' for Hungarian
+        self.openai_api_key = openai_api_key
+        # Get model from environment variable if not provided as argument
+        self.openai_model = openai_model or os.environ.get('OPENAI_MODEL') or DEFAULT_OPENAI_MODEL
 
     def negotiate_endpoint(self):
         resp = requests.get(self.sse_url, stream=True)
@@ -146,6 +166,7 @@ class PDFUploader:
         Export text (preserving paragraphs) and images to local directory.
         Wrap each original line for readability without collapsing words.
         Creates exported.txt with native extraction and exported-ocr.txt with OCR if forced.
+        If OpenAI API key is provided, also creates an AI-friendly version.
         """
         out_dir = self._pdf_dir()
         
@@ -159,14 +180,277 @@ class PDFUploader:
         print(f"Created native text file: {os.path.join(out_dir, 'exported.txt')}")
         
         # Create OCR text file if forced
+        ocr_txt_pages = None
         if self.force_ocr:
             print("\nExtracting text using OCR:")
             ocr_txt_pages = self.extract_text(use_ocr=True)
             self._write_text_file(ocr_txt_pages, images, out_dir, "exported-ocr.txt")
             print(f"Created OCR text file: {os.path.join(out_dir, 'exported-ocr.txt')}")
+        
+        # Create AI-friendly version if API key is provided
+        if self.openai_api_key and self.force_ocr and ocr_txt_pages:
+            print("\nCreating AI-friendly version using ChatGPT API...")
+            self._create_ai_friendly_version(native_txt_pages, ocr_txt_pages, images, out_dir)
             
         print(f"\nExported PDF '{self.pdf_path}' to directory '{out_dir}'")
         
+    def _create_ai_friendly_version(self, native_txt_pages, ocr_txt_pages, images, out_dir):
+        """
+        Create an AI-friendly version of the extracted text using OpenAI API.
+        This combines the native and OCR text to create a more accurate and structured version.
+        If OpenAI is not available or no API key is provided, this will be skipped.
+        """
+        # Check if OpenAI is available
+        if not globals().get('OPENAI_AVAILABLE', False):
+            print("OpenAI package not installed. Skipping AI-friendly version creation.")
+            print("To enable this feature, install the openai package: pip install openai")
+            return
+        
+        # Get API key from various sources
+        api_key = self.openai_api_key or os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            print("OpenAI API key not found. Skipping AI-friendly version creation.")
+            print("To enable this feature, provide an API key via:")
+            print("  - Command line: --openai-api-key YOUR_KEY")
+            print("  - Environment variable: OPENAI_API_KEY=YOUR_KEY")
+            print("  - .env file: OPENAI_API_KEY=YOUR_KEY")
+            return
+            
+        # Determine if the model is an Anthropic (Claude) model
+        is_claude_model = self.openai_model.startswith('claude-') or self.openai_model.startswith('anthropic/')
+        # Determine if the model is an OpenAI o-series model
+        is_o_series = self.openai_model.startswith('o') and not self.openai_model.startswith('openai/')
+        # Determine if the model is a GPT model
+        is_gpt_model = 'gpt' in self.openai_model.lower()
+        
+        try:
+            print(f"Creating AI-friendly version using OpenAI API with model '{self.openai_model}'...")
+            # Create OpenAI client (compatible with openai>=1.0.0)
+            client = openai.OpenAI(api_key=api_key)
+            
+            # Print model type information for debugging
+            model_types = []
+            if is_o_series:
+                model_types.append("OpenAI o-series")
+                print(f"Using o-series model parameters (max_completion_tokens)")
+            elif is_gpt_model:
+                model_types.append("GPT")
+                print(f"Using standard model parameters (max_tokens)")
+            elif is_claude_model:
+                model_types.append("Claude")
+                print(f"Using standard model parameters (max_tokens)")
+            else:
+                print(f"Using standard model parameters (max_tokens)")
+                
+            if model_types:
+                print(f"Detected model type: {', '.join(model_types)}")
+            else:
+                print("Using default model parameters")
+            
+            # Prepare combined text with image references
+            total_pages = min(len(native_txt_pages), len(ocr_txt_pages))
+            all_native_text = []
+            all_ocr_text = []
+            all_image_refs = []
+            
+            # Collect all text and image references
+            for i in range(total_pages):
+                all_native_text.append(f"--- Page {i+1} ---\n{native_txt_pages[i]}")
+                all_ocr_text.append(f"--- Page {i+1} ---\n{ocr_txt_pages[i]}")
+                
+                # Get image references for this page
+                if i+1 in images and images[i+1]:
+                    page_images = []
+                    for img in images[i+1]:
+                        page_images.append(f"[IMAGE: {img}]")
+                    all_image_refs.append(f"--- Images on page {i+1} ---\n" + "\n".join(page_images))
+            
+            # Combine all text
+            full_native_text = "\n\n".join(all_native_text)
+            full_ocr_text = "\n\n".join(all_ocr_text)
+            
+            # Estimate token count (rough approximation: 4 chars = 1 token)
+            estimated_tokens = (len(full_native_text) + len(full_ocr_text)) // 4
+            max_input_tokens = 16000  # Conservative limit for most models
+            
+            # Determine if we need to process in chunks
+            if estimated_tokens > max_input_tokens:
+                print(f"Text is too large for a single API call (est. {estimated_tokens} tokens). Processing in chunks...")
+                # Process in chunks of approximately 3 pages at a time
+                chunk_size = max(1, total_pages // (estimated_tokens // max_input_tokens + 1))
+                return self._process_in_chunks(client, native_txt_pages, ocr_txt_pages, images, out_dir, chunk_size, is_o_series, is_gpt_model, is_claude_model)
+            else:
+                print(f"Processing entire document in a single API call (est. {estimated_tokens} tokens)")
+                # Create prompt for the entire document
+                prompt = f"""I have extracted text from a PDF document using two methods: native extraction and OCR.
+                Please create a clean, well-formatted version that combines the best of both extractions.
+                Preserve paragraph structure, fix any OCR errors, and ensure the text is coherent and readable.
+                Maintain page markers and image references in your output.
+                
+                NATIVE EXTRACTION:\n{full_native_text}\n\nOCR EXTRACTION:\n{full_ocr_text}"""
+                
+                # Call OpenAI API with retry logic
+                max_retries = 3
+                cleaned_text = ""
+                for attempt in range(max_retries):
+                    try:
+                        # Prepare API call parameters based on model type
+                        params = {
+                            "model": self.openai_model,
+                            "messages": [
+                                {"role": "system", "content": "You are a helpful assistant that cleans and formats text extracted from PDFs."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "temperature": 0.3
+                        }
+                        
+                        # Add the appropriate token parameter based on model type
+                        if is_o_series:
+                            params["max_completion_tokens"] = 8000
+                        else:
+                            params["max_tokens"] = 8000
+                            
+                        # Make the API call with the appropriate parameters
+                        response = client.chat.completions.create(**params)
+                        
+                        # Extract the cleaned text
+                        cleaned_text = response.choices[0].message.content
+                        print("Successfully processed entire document with AI")
+                        break
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt  # Exponential backoff
+                            print(f"API call failed: {e}. Retrying in {wait_time} seconds...")
+                            time.sleep(wait_time)
+                        else:
+                            print(f"Failed to process document after {max_retries} attempts: {e}")
+                            # Fall back to native text with page markers
+                            cleaned_text = full_native_text
+                
+                # Add image references
+                if all_image_refs:
+                    cleaned_text += "\n\n" + "\n\n".join(all_image_refs)
+                
+                # Write the AI-friendly version to file
+                ai_file = os.path.join(out_dir, "exported-ai.txt")
+                with open(ai_file, 'w', encoding='utf-8') as f:
+                    f.write(cleaned_text)
+                
+                print(f"Created AI-friendly text file: {ai_file}")
+                return
+            
+        except Exception as e:
+            print(f"Error creating AI-friendly version: {e}")
+            
+            # Attempt to fallback to a different model if there's an API error
+            if "model" in str(e).lower() or "parameter" in str(e).lower():
+                fallback_model = "gpt-3.5-turbo" if self.openai_model != "gpt-3.5-turbo" else "gpt-4"
+                print(f"\nAttempting fallback to {fallback_model}...")
+                try:
+                    # Save original model name
+                    original_model = self.openai_model
+                    # Set fallback model
+                    self.openai_model = fallback_model
+                    # Try again with fallback model
+                    self._create_ai_friendly_version(native_txt_pages, ocr_txt_pages, images, out_dir)
+                    print(f"Successfully processed with fallback model {fallback_model}")
+                    return
+                except Exception as fallback_e:
+                    print(f"Fallback to {fallback_model} also failed: {fallback_e}")
+                    # Restore original model name
+                    self.openai_model = original_model
+    
+    def _process_in_chunks(self, client, native_txt_pages, ocr_txt_pages, images, out_dir, chunk_size, is_o_series, is_gpt_model, is_claude_model):
+        """
+        Process the document in chunks when it's too large for a single API call.
+        """
+        total_pages = min(len(native_txt_pages), len(ocr_txt_pages))
+        chunks = []
+        
+        # Process document in chunks
+        for chunk_start in range(0, total_pages, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, total_pages)
+            print(f"Processing chunk: pages {chunk_start+1}-{chunk_end} of {total_pages}")
+            
+            # Prepare text for this chunk
+            chunk_native = []
+            chunk_ocr = []
+            for i in range(chunk_start, chunk_end):
+                chunk_native.append(f"--- Page {i+1} ---\n{native_txt_pages[i]}")
+                chunk_ocr.append(f"--- Page {i+1} ---\n{ocr_txt_pages[i]}")
+            
+            full_native_chunk = "\n\n".join(chunk_native)
+            full_ocr_chunk = "\n\n".join(chunk_ocr)
+            
+            # Create prompt for this chunk
+            prompt = f"""I have extracted text from pages {chunk_start+1}-{chunk_end} of a PDF using two methods: native extraction and OCR.
+            Please create a clean, well-formatted version that combines the best of both extractions.
+            Preserve paragraph structure, fix any OCR errors, and ensure the text is coherent and readable.
+            Maintain page markers in your output.
+            
+            NATIVE EXTRACTION:\n{full_native_chunk}\n\nOCR EXTRACTION:\n{full_ocr_chunk}"""
+            
+            # Call OpenAI API with retry logic
+            max_retries = 3
+            chunk_text = ""
+            for attempt in range(max_retries):
+                try:
+                    # Prepare API call parameters based on model type
+                    params = {
+                        "model": self.openai_model,
+                        "messages": [
+                            {"role": "system", "content": "You are a helpful assistant that cleans and formats text extracted from PDFs."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.3
+                    }
+                    
+                    # Add the appropriate token parameter based on model type
+                    if is_o_series:
+                        params["max_completion_tokens"] = 4000
+                    else:
+                        params["max_tokens"] = 4000
+                        
+                    # Make the API call with the appropriate parameters
+                    response = client.chat.completions.create(**params)
+                    
+                    # Extract the cleaned text
+                    chunk_text = response.choices[0].message.content
+                    print(f"Successfully processed chunk {chunk_start+1}-{chunk_end}")
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # Exponential backoff
+                        print(f"API call failed: {e}. Retrying in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"Failed to process chunk {chunk_start+1}-{chunk_end} after {max_retries} attempts: {e}")
+                        # Fall back to native text
+                        chunk_text = full_native_chunk
+            
+            chunks.append(chunk_text)
+        
+        # Combine all chunks
+        combined_text = "\n\n".join(chunks)
+        
+        # Add image references
+        image_refs = []
+        for page_num, page_images in images.items():
+            if page_images:
+                refs = [f"[IMAGE: {img}]" for img in page_images]
+                image_refs.append(f"--- Images on page {page_num} ---\n" + "\n".join(refs) + "\n--- End of images ---")
+        
+        if image_refs:
+            combined_text += "\n\n" + "\n\n".join(image_refs)
+        
+        # Write the AI-friendly version to file
+        ai_file = os.path.join(out_dir, "exported-ai.txt")
+        with open(ai_file, 'w', encoding='utf-8') as f:
+            f.write(combined_text)
+        
+        print(f"Created AI-friendly text file: {ai_file}")
+        return
+    
     def _write_text_file(self, txt_pages, images, out_dir, filename):
         """
         Write text content to file with page markers and image placeholders.
@@ -209,7 +493,7 @@ class PDFUploader:
             
         with open(out_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
-            
+        
         print(f"Created text file: {out_file}")
 
     def upload(self):
@@ -252,6 +536,7 @@ class PDFUploader:
 
 if __name__ == '__main__':
     import argparse
+    import os
     parser = argparse.ArgumentParser(description='Batch PDF processing: export or MCP upload')
     parser.add_argument('pdf_path', help='PDF file or directory path')
     parser.add_argument('--export', action='store_true', help='Export text/images locally')
@@ -259,7 +544,12 @@ if __name__ == '__main__':
     parser.add_argument('--sse_url', help='SSE negotiation URL for MCP upload')
     parser.add_argument('--force-ocr', action='store_true', help='Force OCR processing and create exported-ocr.txt')
     parser.add_argument('--lang', default='eng', help='OCR language (e.g., eng, hun). Default is English.')
+    parser.add_argument('--openai-api-key', help='OpenAI API key for AI-friendly version creation')
+    parser.add_argument('--openai-model', default=DEFAULT_OPENAI_MODEL, help=f'OpenAI model to use for AI processing (default: {DEFAULT_OPENAI_MODEL})')
     args = parser.parse_args()
+    
+    # Check for API key in environment variable if not provided as argument
+    openai_api_key = args.openai_api_key or os.environ.get('OPENAI_API_KEY')
 
     uploader = PDFUploader(
         pdf_path=args.pdf_path,
@@ -267,6 +557,8 @@ if __name__ == '__main__':
         export=args.export,
         output_dir=args.output_dir,
         force_ocr=args.force_ocr,
-        lang=args.lang
+        lang=args.lang,
+        openai_api_key=openai_api_key,
+        openai_model=args.openai_model
     )
     uploader.run()

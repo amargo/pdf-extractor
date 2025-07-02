@@ -16,6 +16,7 @@ PDF Extractor is a Python tool that processes PDF files to extract text and imag
   - Saves text files with clear page markers and image references
   - Saves all extracted images alongside text
 - **Hungarian Language Support**: Special support for Hungarian accented characters via Tesseract OCR
+- **AI-Enhanced Text**: Optional AI processing to combine and improve extracted text using OpenAI API
 - **MCP Upload**: Optional upload functionality via MCP protocol
 
 ## Installation
@@ -24,6 +25,7 @@ PDF Extractor is a Python tool that processes PDF files to extract text and imag
 
 - Python 3.6+
 - Tesseract OCR (for OCR functionality)
+- OpenAI API key (optional, for AI-enhanced text processing)
 
 ### Setup
 
@@ -45,6 +47,12 @@ pip install -r requirements.txt
    - **macOS**: `brew install tesseract-lang`
    - **Linux**: `sudo apt install tesseract-ocr-hun`
 
+4. **Set up OpenAI API key** (optional, for AI-enhanced text):
+
+   - Create a `.env` file based on the provided `.env.example`
+   - Add your OpenAI API key to the `.env` file
+   - Alternatively, set the `OPENAI_API_KEY` environment variable or pass it via command line
+
 ## Usage
 
 ### Command Line Options
@@ -59,9 +67,11 @@ Where `<pdf_path>` can be either a single PDF file or a directory containing PDF
 
 - `--export`: Export text and images locally (default mode is upload)
 - `--output_dir <dir>`: Base directory for exports (default: './exports')
-- `--force-ocr`: Force OCR processing and create exported-ocr.txt
-- `--lang <lang>`: OCR language code (default: 'eng', use 'hun' for Hungarian)
 - `--sse_url <url>`: SSE negotiation URL for MCP upload
+- `--force-ocr`: Force OCR processing and create exported-ocr.txt
+- `--lang <code>`: OCR language (e.g., eng, hun). Default is English
+- `--openai-api-key <key>`: OpenAI API key for AI-friendly version creation
+- `--openai-model <model>`: OpenAI model to use (default: o4-mini)
 
 ### Examples
 
@@ -83,16 +93,43 @@ python pdf_uploader.py document.pdf --export --force-ocr
 python pdf_uploader.py document.pdf --export --force-ocr --lang hun
 ```
 
-#### Process all PDFs in a directory with Hungarian OCR:
+#### Export a single PDF with AI-enhanced text processing:
 
 ```bash
-python pdf_uploader.py ./my_pdfs/ --export --force-ocr --lang hun
+python pdf_uploader.py document.pdf --export --force-ocr --openai-api-key YOUR_API_KEY
+```
+
+#### Export a single PDF with a specific OpenAI model:
+
+```bash
+python pdf_uploader.py document.pdf --export --force-ocr --openai-api-key YOUR_API_KEY --openai-model gpt-4
+```
+
+#### Process all PDFs in a directory with Hungarian OCR and AI enhancement:
+
+```bash
+python pdf_uploader.py ./my_pdfs/ --export --force-ocr --lang hun --openai-api-key YOUR_API_KEY
 ```
 
 #### Upload a PDF via MCP:
 
 ```bash
 python pdf_uploader.py document.pdf --sse_url https://example.com/sse
+```
+
+## Environment Variables
+
+You can set the following environment variables in a `.env` file:
+
+```
+# OpenAI API Key for AI-friendly text processing
+OPENAI_API_KEY=your_openai_api_key_here
+
+# OpenAI model to use for AI processing
+OPENAI_MODEL=o4-mini
+
+# OCR Language (default is English)
+OCR_LANGUAGE=eng  # or hun for Hungarian
 ```
 
 ## Output Structure
@@ -104,6 +141,7 @@ For each PDF processed with `--export`, the tool creates:
   └── <pdf_name>/
       ├── exported.txt         # Text from native extraction
       ├── exported-ocr.txt     # Text from OCR (if --force-ocr is used)
+      ├── exported-ai.txt      # AI-enhanced text (if OpenAI API key is provided)
       └── <pdf_name>_page<N>_img<M>.<ext>  # Extracted images
 ```
 
@@ -121,6 +159,7 @@ The repository includes VS Code tasks for common operations:
 - **Export PDFs**: Standard export with native text extraction
 - **Export PDFs with OCR**: Export with OCR using English language
 - **Export PDFs with Hungarian OCR**: Export with OCR optimized for Hungarian text
+- **Export PDFs with AI Processing**: Export with OCR and AI-enhanced text processing
 - **Upload PDFs**: Upload to MCP with native text extraction
 - **Upload PDFs with OCR**: Upload to MCP with OCR text extraction
 
@@ -131,6 +170,13 @@ The repository includes VS Code tasks for common operations:
 - If OCR fails, the tool will automatically fall back to native extraction
 - For best results with Hungarian text, ensure the Hungarian language data is properly installed
 - Verify Tesseract installation with: `tesseract --list-langs` (should show 'hun' in the list)
+
+### AI Processing Issues
+
+- If the OpenAI package is not installed, AI processing will be skipped
+- If the API key is invalid or missing, AI processing will be skipped
+- If API calls fail, the tool will retry with exponential backoff
+- If all retries fail, it will fall back to using the native text
 
 ### Image Extraction
 
