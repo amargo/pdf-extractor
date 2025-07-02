@@ -1,0 +1,137 @@
+{
+	// See https://go.microsoft.com/fwlink/?LinkId=733558
+	// for the documentation about the tasks.json format
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Export PDFs",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"${workspaceFolder}/pdf_uploader.py",
+				"${input:pdfPath}",
+				"--export",
+				"--output_dir",
+				"${input:outputDir}"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": true,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Export PDFs with OCR",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"${workspaceFolder}/pdf_uploader.py",
+				"${input:pdfPath}",
+				"--export",
+				"--output_dir",
+				"${input:outputDir}",
+				"--force-ocr"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": true,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Export PDFs with Hungarian OCR",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"${workspaceFolder}/pdf_uploader.py",
+				"${input:pdfPath}",
+				"--export",
+				"--output_dir",
+				"${input:outputDir}",
+				"--force-ocr",
+				"--lang",
+				"hun"
+			],
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": true,
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Upload PDFs",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"${workspaceFolder}/pdf_uploader.py",
+				"${input:pdfPath}",
+				"--sse_url",
+				"${input:sseUrl}"
+			],
+			"group": "none",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Upload PDFs with OCR",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"${workspaceFolder}/pdf_uploader.py",
+				"${input:pdfPath}",
+				"--sse_url",
+				"${input:sseUrl}",
+				"--force-ocr"
+			],
+			"group": "none",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": []
+		}
+	],
+	"inputs": [
+		{
+			"id": "pdfPath",
+			"type": "promptString",
+			"description": "Enter PDF file or directory path",
+			"default": "./"
+		},
+		{
+			"id": "outputDir",
+			"type": "promptString",
+			"description": "Enter output directory",
+			"default": "${workspaceFolder}/exports"
+		},
+		{
+			"id": "sseUrl",
+			"type": "promptString",
+			"description": "Enter SSE negotiation URL",
+			"default": "https://mcp-memory.gszoboszlai.workers.dev/82b841cd-xxxx-xxxx-xxxx-xxxxxxxxxxxx/sse"
+		}
+	]
+}
