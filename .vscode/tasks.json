@@ -38,7 +38,7 @@
 				"--export",
 				"--output_dir",
 				"${input:outputDir}",
-				"--force-ocr"
+				"--use-ocr"
 			],
 			"group": "build",
 			"presentation": {
@@ -61,7 +61,7 @@
 				"--export",
 				"--output_dir",
 				"${input:outputDir}",
-				"--force-ocr",
+				"--use-ocr",
 				"--lang",
 				"hun"
 			],
@@ -86,7 +86,7 @@
 				"--export",
 				"--output_dir",
 				"${input:outputDir}",
-				"--force-ocr",
+				"--use-ocr",
 				"--lang",
 				"${input:ocrLang}",
 				"--openai-api-key",
@@ -130,7 +130,7 @@
 				"${input:pdfPath}",
 				"--sse_url",
 				"${input:sseUrl}",
-				"--force-ocr"
+				"--use-ocr"
 			],
 			"group": "none",
 			"presentation": {

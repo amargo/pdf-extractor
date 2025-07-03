@@ -1,0 +1,24 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Debug PDF Extractor",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/pdf_extractor.py",
+            "args": [
+                "szamlaW",
+                "--export",
+                "--output_dir", 
+                "./exports",
+                "--use-ocr",
+                "--lang", "hun"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}
