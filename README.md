@@ -58,7 +58,7 @@ pip install -r requirements.txt
 ### Command Line Options
 
 ```bash
-python pdf_uploader.py <pdf_path> [options]
+python pdf_extractor.py <pdf_path> [options]
 ```
 
 Where `<pdf_path>` can be either a single PDF file or a directory containing PDFs.
@@ -78,43 +78,43 @@ Where `<pdf_path>` can be either a single PDF file or a directory containing PDF
 #### Export a single PDF with native text extraction:
 
 ```bash
-python pdf_uploader.py document.pdf --export --output_dir ./my_exports
+python pdf_extractor.py document.pdf --export --output_dir ./my_exports
 ```
 
 #### Export a single PDF with OCR (English):
 
 ```bash
-python pdf_uploader.py document.pdf --export --force-ocr
+python pdf_extractor.py document.pdf --export --force-ocr
 ```
 
 #### Export a single PDF with Hungarian OCR:
 
 ```bash
-python pdf_uploader.py document.pdf --export --force-ocr --lang hun
+python pdf_extractor.py document.pdf --export --force-ocr --lang hun
 ```
 
 #### Export a single PDF with AI-enhanced text processing:
 
 ```bash
-python pdf_uploader.py document.pdf --export --force-ocr --openai-api-key YOUR_API_KEY
+python pdf_extractor.py document.pdf --export --force-ocr --openai-api-key YOUR_API_KEY
 ```
 
 #### Export a single PDF with a specific OpenAI model:
 
 ```bash
-python pdf_uploader.py document.pdf --export --force-ocr --openai-api-key YOUR_API_KEY --openai-model gpt-4
+python pdf_extractor.py document.pdf --export --force-ocr --openai-api-key YOUR_API_KEY --openai-model gpt-4
 ```
 
 #### Process all PDFs in a directory with Hungarian OCR and AI enhancement:
 
 ```bash
-python pdf_uploader.py ./my_pdfs/ --export --force-ocr --lang hun --openai-api-key YOUR_API_KEY
+python pdf_extractor.py ./my_pdfs/ --export --force-ocr --lang hun --openai-api-key YOUR_API_KEY
 ```
 
 #### Upload a PDF via MCP:
 
 ```bash
-python pdf_uploader.py document.pdf --sse_url https://example.com/sse
+python pdf_extractor.py document.pdf --sse_url https://example.com/sse
 ```
 
 ## Environment Variables
