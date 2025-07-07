@@ -16,6 +16,15 @@ try:
 except ImportError:
     TIKTOKEN_AVAILABLE = False
 
+# Import helper functions
+from ai_helpers import (
+    MODEL_GPT4, MODEL_GPT35_TURBO, 
+    PREFIX_CLAUDE, PREFIX_ANTHROPIC, PREFIX_O, PREFIX_OPENAI,
+    update_model_flags, prepare_text_and_images, prepare_chunk, 
+    save_prompt_to_file, write_output_file, print_token_usage_summary,
+    adjust_chunk_size
+)
+
 # Default OpenAI model to use
 DEFAULT_OPENAI_MODEL = "o4-mini"
 
@@ -24,7 +33,185 @@ class AIProcessor:
     Handles AI-based processing of extracted PDF text using OpenAI API.
     Creates an enhanced version combining native and OCR text.
     """
-    
+
+    def _update_model_flags(self):
+        """
+        Update model type flags based on the current model name.
+        """
+        self.is_claude_model, self.is_o_series, self.is_gpt_model = update_model_flags(self.model)
+
+    def _prepare_text_and_images(self, native_txt_pages, ocr_txt_pages, images):
+        """
+        Prepare text and image references for processing.
+        
+        Args:
+            native_txt_pages: List of text pages from native extraction
+            ocr_txt_pages: List of text pages from OCR extraction
+            images: Dictionary mapping page numbers to lists of image filenames
+            
+        Returns:
+            tuple: (total_pages, full_native_text, full_ocr_text, all_image_refs)
+        """
+        return prepare_text_and_images(native_txt_pages, ocr_txt_pages, images)
+
+    def _calculate_token_limits(self, full_native_text, full_ocr_text):
+        """
+        Calculate token counts and limits for the model.
+        
+        Args:
+            full_native_text: Combined native text
+            full_ocr_text: Combined OCR text
+            
+        Returns:
+            tuple: (total_tokens, prompt_tokens, native_tokens, ocr_tokens, max_input_tokens)
+        """
+        # Accurately calculate token counts using our token counting method
+        prompt_tokens = self._count_tokens(self.prompt_template)
+        native_tokens = self._count_tokens(full_native_text)
+        ocr_tokens = self._count_tokens(full_ocr_text)
+        total_tokens = prompt_tokens + native_tokens + ocr_tokens
+        
+        # Define token limits based on the model
+        if self.is_o_series:
+            max_input_tokens = 128000  # o4 models have large context windows
+        elif self.is_gpt_model and MODEL_GPT4 in self.model:
+            max_input_tokens = 8000  # GPT-4 has a larger context window
+        else:
+            max_input_tokens = 6000  # Conservative limit for most models
+            
+        print(f"Estimated tokens: {total_tokens} (prompt: {prompt_tokens}, native: {native_tokens}, OCR: {ocr_tokens})")
+        print(f"Token limit for model {self.model}: {max_input_tokens}")
+        
+        return total_tokens, prompt_tokens, native_tokens, ocr_tokens, max_input_tokens
+
+    def _determine_processing_approach(self, total_tokens, max_input_tokens, total_pages, native_tokens, ocr_tokens, prompt_tokens):
+        """
+        Determine whether to process in chunks and calculate optimal chunk size.
+        
+        Args:
+            total_tokens: Total estimated tokens
+            max_input_tokens: Maximum input tokens allowed
+            total_pages: Total pages in document
+            native_tokens: Tokens in native text
+            ocr_tokens: Tokens in OCR text
+            prompt_tokens: Tokens in prompt template
+            
+        Returns:
+            tuple: (process_in_chunks, optimal_chunk_size)
+        """
+        if total_tokens <= max_input_tokens:
+            print(f"Processing entire document in a single API call (est. {total_tokens} tokens)")
+            return False, 0
+            
+        print(f"Text is too large for a single API call (est. {total_tokens} tokens > {max_input_tokens}). Processing in chunks...")
+        
+        # Calculate optimal chunk size based on token count
+        avg_page_tokens = (native_tokens + ocr_tokens) / total_pages
+        tokens_per_chunk = max_input_tokens - prompt_tokens - 500  # 500 token buffer
+        optimal_chunk_size = max(1, int(tokens_per_chunk / avg_page_tokens))
+        
+        print(f"Calculated optimal chunk size: {optimal_chunk_size} pages (avg {avg_page_tokens:.1f} tokens per page)")
+        return True, optimal_chunk_size
+
+    def _save_prompt_to_file(self, prompt, out_dir, prompt_filename):
+        """
+        Save the prompt to a file for debugging.
+        
+        Args:
+            prompt: The prompt text
+            out_dir: Output directory
+            prompt_filename: Filename for the prompt
+        """
+        save_prompt_to_file(prompt, out_dir, prompt_filename)
+
+    def _write_output_file(self, text, out_dir, filename="exported-ai.txt"):
+        """
+        Write text to output file and return the file path.
+        
+        Args:
+            text: Text to write
+            out_dir: Output directory
+            filename: Output filename
+            
+        Returns:
+            str: Path to the created file
+        """
+        return write_output_file(text, out_dir, filename)
+
+    def _handle_api_response(self, response, prompt_filename):
+        """
+        Handle API response and log token usage.
+        
+        Args:
+            response: API response object
+            prompt_filename: Name of the prompt file for logging
+            
+        Returns:
+            tuple: (cleaned_text, token_usage)
+        """
+        print(f"API Response received for {prompt_filename}")
+        
+        token_usage = None
+        
+        # Log token usage if available
+        if hasattr(response, 'usage'):
+            token_usage = response.usage
+            print(f"Token usage: {token_usage.total_tokens} total tokens")
+            print(f"  - Prompt tokens: {token_usage.prompt_tokens}")
+            print(f"  - Completion tokens: {token_usage.completion_tokens}")
+        
+        if not response.choices:
+            print("WARNING: No choices returned in the API response!")
+            return None, token_usage
+
+        for i, choice in enumerate(response.choices):
+            print(f"Choice {i+1} details:")
+            print(f"  - Finish reason: {choice.finish_reason}")
+            if hasattr(choice, 'message') and choice.message and hasattr(choice.message, 'content') and choice.message.content:
+                content_preview = choice.message.content[:100] + '...'
+                print(f"  - Content preview: {content_preview}")
+
+        cleaned_text = response.choices[0].message.content or ""
+
+        if response.choices[0].finish_reason == 'length':
+            print(f"Warning: AI response for {prompt_filename} was truncated due to length.")
+
+        return cleaned_text, token_usage
+
+    def _attempt_model_fallback(self, native_txt_pages, ocr_txt_pages, images, out_dir, error):
+        """
+        Attempt to fallback to a different model if there's an API error.
+        
+        Args:
+            native_txt_pages: List of text pages from native extraction
+            ocr_txt_pages: List of text pages from OCR extraction
+            images: Dictionary mapping page numbers to lists of image filenames
+            out_dir: Output directory
+            error: The exception that triggered the fallback
+            
+        Returns:
+            str: Path to the created AI-friendly file, or None if failed
+        """
+        if "model" in str(error).lower() or "parameter" in str(error).lower():
+            fallback_model = MODEL_GPT35_TURBO if self.model != MODEL_GPT35_TURBO else MODEL_GPT4
+            print(f"\nAttempting fallback to {fallback_model}...")
+            try:
+                # Save original model name
+                original_model = self.model
+                # Set fallback model
+                self.model = fallback_model
+                # Update model type flags
+                self._update_model_flags()
+                # Try again with fallback model
+                return self.create_ai_friendly_version(native_txt_pages, ocr_txt_pages, images, out_dir)
+            except Exception as fallback_e:
+                print(f"Fallback to {fallback_model} also failed: {fallback_e}")
+                # Restore original model name
+                self.model = original_model
+                self._update_model_flags()
+        return None
+
+
     def __init__(self, api_key=None, model=None):
         """
         Initialize the AI processor with API key and model.
@@ -37,9 +224,7 @@ class AIProcessor:
         self.model = model or os.environ.get('OPENAI_MODEL') or DEFAULT_OPENAI_MODEL
         
         # Determine model type
-        self.is_claude_model = self.model.startswith('claude-') or self.model.startswith('anthropic/')
-        self.is_o_series = self.model.startswith('o') and not self.model.startswith('openai/')
-        self.is_gpt_model = 'gpt' in self.model.lower()
+        self._update_model_flags()
         
         # Initialize tokenizer if available
         self.tokenizer = None
@@ -144,10 +329,7 @@ Task: merge page by page so that the final text:
         Calls the OpenAI API with retry logic, saves the prompt, and returns the cleaned text.
         """
         # Save the prompt to a file for debugging
-        prompt_filepath = os.path.join(out_dir, prompt_filename)
-        with open(prompt_filepath, 'w', encoding='utf-8') as f:
-            f.write(prompt)
-        print(f"Saved prompt to file: {prompt_filepath}")
+        self._save_prompt_to_file(prompt, out_dir, prompt_filename)
 
         # Calculate token count for the prompt
         prompt_token_count = self._count_tokens(prompt)
@@ -166,31 +348,9 @@ Task: merge page by page so that the final text:
                 else:
                     client.last_response = response
                 
-                print(f"API Response received for {prompt_filename}")
+                cleaned_text, _ = self._handle_api_response(response, prompt_filename)
                 
-                # Log token usage if available
-                if hasattr(response, 'usage'):
-                    print(f"Token usage: {response.usage.total_tokens} total tokens")
-                    print(f"  - Prompt tokens: {response.usage.prompt_tokens}")
-                    print(f"  - Completion tokens: {response.usage.completion_tokens}")
-                
-                if not response.choices:
-                    print("WARNING: No choices returned in the API response!")
-                    continue 
-
-                for i, choice in enumerate(response.choices):
-                    print(f"Choice {i+1} details:")
-                    print(f"  - Finish reason: {choice.finish_reason}")
-                    if hasattr(choice, 'message') and choice.message and hasattr(choice.message, 'content') and choice.message.content:
-                        content_preview = choice.message.content[:100] + '...'
-                        print(f"  - Content preview: {content_preview}")
-
-                cleaned_text = response.choices[0].message.content or ""
-
-                if response.choices[0].finish_reason == 'length':
-                    print(f"Warning: AI response for {prompt_filename} was truncated due to length.")
-
-                if cleaned_text.strip():
+                if cleaned_text and cleaned_text.strip():
                     return cleaned_text
 
             except openai.APIError as e:
@@ -385,12 +545,7 @@ Task: merge page by page so that the final text:
         completion_tokens_used = 0
         
         # Define token limits based on the model
-        if self.is_o_series:
-            max_input_tokens = 128000  # o4 models have large context windows
-        elif self.is_gpt_model and "gpt-4" in self.model:
-            max_input_tokens = 8000  # GPT-4 has a larger context window
-        else:
-            max_input_tokens = 6000  # Conservative limit for most models
+        _, _, _, _, max_input_tokens = self._calculate_token_limits("", "")
         
         # Process document in chunks
         for chunk_start in range(0, total_pages, chunk_size):
@@ -398,14 +553,7 @@ Task: merge page by page so that the final text:
             print(f"Processing chunk: pages {chunk_start+1}-{chunk_end} of {total_pages}")
             
             # Prepare text for this chunk
-            chunk_native = []
-            chunk_ocr = []
-            for i in range(chunk_start, chunk_end):
-                chunk_native.append(f"--- Page {i+1} ---\n{native_txt_pages[i]}\n--- End of Page {i+1} ---")
-                chunk_ocr.append(f"--- Page {i+1} ---\n{ocr_txt_pages[i]}\n--- End of Page {i+1} ---")
-            
-            full_native_chunk = "\n\n".join(chunk_native)
-            full_ocr_chunk = "\n\n".join(chunk_ocr)
+            full_native_chunk, full_ocr_chunk = prepare_chunk(native_txt_pages, ocr_txt_pages, chunk_start, chunk_end)
             
             # Create a detailed prompt for the AI chunk
             prompt = self.prompt_template.format(
@@ -423,7 +571,6 @@ Task: merge page by page so that the final text:
             
             # Track token usage if response has usage information
             try:
-                # This assumes the _call_api_with_retry method returns the response object or has access to it
                 if hasattr(client, 'last_response') and hasattr(client.last_response, 'usage'):
                     usage = client.last_response.usage
                     total_tokens_used += usage.total_tokens
@@ -431,28 +578,13 @@ Task: merge page by page so that the final text:
                     print(f"Chunk {chunk_start+1}-{chunk_end} token usage: {usage.total_tokens} total, {usage.completion_tokens} completion")
                     
                     # Dynamically adjust chunk size for next iteration
-                    if chunk_end < total_pages:
-                        if usage.total_tokens < max_input_tokens * 0.8:
-                            # If we're using less than 80% of the limit, increase chunk size
-                            new_chunk_size = min(chunk_size + 1, 10)  # Cap at 10 pages
-                            if new_chunk_size != chunk_size:
-                                chunk_size = new_chunk_size
-                                print(f"Increasing chunk size to {chunk_size} pages for next chunk")
-                        elif usage.total_tokens > max_input_tokens * 0.9:
-                            # If we're close to the limit, decrease chunk size
-                            new_chunk_size = max(1, chunk_size - 1)
-                            if new_chunk_size != chunk_size:
-                                chunk_size = new_chunk_size
-                                print(f"Decreasing chunk size to {chunk_size} pages for next chunk")
+                    chunk_size = adjust_chunk_size(usage, max_input_tokens, chunk_size, chunk_end, total_pages)
             except Exception as e:
                 print(f"Error tracking token usage: {e}")
             
             # Write the individual chunk to its own file for debugging
             chunk_filename = f"exported-ai-chunk-{chunk_start+1}-{chunk_end}.txt"
-            chunk_filepath = os.path.join(out_dir, chunk_filename)
-            with open(chunk_filepath, 'w', encoding='utf-8') as f:
-                f.write(chunk_text)
-            print(f"Created AI chunk file: {chunk_filepath}")
+            self._write_output_file(chunk_text, out_dir, chunk_filename)
             
             chunks.append(chunk_text)
         
@@ -471,35 +603,32 @@ Task: merge page by page so that the final text:
         
         # Print token usage summary if available
         if total_tokens_used > 0:
-            print("\nToken usage summary:")
-            print(f"Total tokens used: {total_tokens_used}")
-            print(f"Completion tokens used: {completion_tokens_used}")
-            print(f"Prompt tokens used: {total_tokens_used - completion_tokens_used}")
-            
-            # Estimate cost (very rough approximation)
-            prompt_tokens_cost = 0
-            completion_tokens_cost = 0
-            
-            if "gpt-4" in self.model:
-                prompt_tokens_cost = 0.00003 * (total_tokens_used - completion_tokens_used)
-                completion_tokens_cost = 0.00006 * completion_tokens_used
-            elif "gpt-3.5" in self.model:
-                prompt_tokens_cost = 0.0000015 * (total_tokens_used - completion_tokens_used)
-                completion_tokens_cost = 0.000002 * completion_tokens_used
-            elif self.is_o_series:
-                prompt_tokens_cost = 0.000005 * (total_tokens_used - completion_tokens_used)
-                completion_tokens_cost = 0.000015 * completion_tokens_used
-            else:
-                prompt_tokens_cost = 0.00001 * (total_tokens_used - completion_tokens_used)
-                completion_tokens_cost = 0.00002 * completion_tokens_used
-                
-            total_cost = prompt_tokens_cost + completion_tokens_cost
-            print(f"Estimated cost: ${total_cost:.6f} (input: ${prompt_tokens_cost:.6f}, output: ${completion_tokens_cost:.6f})")
+            print_token_usage_summary(self.model, self.is_o_series, total_tokens_used, completion_tokens_used)
         
         # Write the AI-friendly version to file
-        ai_file = os.path.join(out_dir, "exported-ai.txt")
-        with open(ai_file, 'w', encoding='utf-8') as f:
-            f.write(combined_text)
+        return self._write_output_file(combined_text, out_dir, "exported-ai.txt")
+
+    def _prepare_chunk(self, native_txt_pages, ocr_txt_pages, chunk_start, chunk_end):
+        """
+        Prepare text for a specific chunk of pages.
         
-        print(f"Created AI-friendly text file: {ai_file}")
-        return ai_file
+        Args:
+            native_txt_pages: List of text pages from native extraction
+            ocr_txt_pages: List of text pages from OCR extraction
+            chunk_start: Starting page index
+            chunk_end: Ending page index
+            
+        Returns:
+            tuple: (full_native_chunk, full_ocr_chunk)
+        """
+        return prepare_chunk(native_txt_pages, ocr_txt_pages, chunk_start, chunk_end)
+
+    def _print_token_usage_summary(self, total_tokens_used, completion_tokens_used):
+        """
+        Print token usage summary and estimate cost.
+        
+        Args:
+            total_tokens_used: Total tokens used
+            completion_tokens_used: Completion tokens used
+        """
+        print_token_usage_summary(self.model, self.is_o_series, total_tokens_used, completion_tokens_used)
